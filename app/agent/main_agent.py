@@ -8,7 +8,7 @@ from typing import Any
 from app.agent.checkpoint import delete_thread_checkpoint, read_thread_checkpoint
 from app.agent.fork_scheduler import reset_fork_scope
 from app.agent.prompts import get_system_prompt
-from app.agent.settings import main_timeout_sec
+from app.agent.settings import main_timeout_sec, retrieval_warmup_timeout_sec
 from app.agent.state import initial_state, state_payload
 from app.api.connection import manager
 from app.api.monitor import monitor
@@ -186,12 +186,44 @@ async def _resume_agent_loop(thread_id: str) -> AgentResult:
         )
 
 
+async def _warm_retrieval_resources(thread_id: str, session_dir: Path) -> None:
+    """Initialize the local hybrid retriever before the main Agent timeout starts.
+
+    SentenceTransformer document encoding is a one-time startup cost and can take
+    far longer than an ordinary search. Keeping it inside item_search's 30-second
+    reliability timeout causes retries to spawn more non-cancellable worker
+    threads. Warm it once, separately, then let every tool call use the hot cache.
+    """
+
+    from app.recall.hybrid import get_hybrid_retriever
+
+    with thread_scope(thread_id, session_dir, root_thread_id=thread_id):
+        await monitor.report_stage("prepare", "正在预热商品检索索引")
+    await asyncio.wait_for(
+        asyncio.to_thread(get_hybrid_retriever),
+        timeout=retrieval_warmup_timeout_sec(),
+    )
+
+
 async def run_agent(
     query: str,
     thread_id: str,
     user_id: str | None = None,
 ) -> AgentResult:
     session_dir = ensure_session_dir(thread_id)
+    try:
+        await _warm_retrieval_resources(thread_id, session_dir)
+    except asyncio.TimeoutError:
+        message = f"商品检索预热超过 {retrieval_warmup_timeout_sec():g}s"
+        with thread_scope(thread_id, session_dir, root_thread_id=thread_id):
+            await monitor.report_error("retrieval_warmup_timeout", message)
+        return AgentResult(status="timeout", thread_id=thread_id, error=message)
+    except Exception as exc:
+        message = f"检索预热失败：{type(exc).__name__}: {exc}"
+        with thread_scope(thread_id, session_dir, root_thread_id=thread_id):
+            await monitor.report_error("retrieval_warmup_error", message)
+        return AgentResult(status="error", thread_id=thread_id, error=message)
+
     try:
         return await asyncio.wait_for(
             _run_agent_loop(query, thread_id, user_id),
@@ -218,6 +250,19 @@ async def run_agent(
 
 async def resume_agent(thread_id: str) -> AgentResult:
     session_dir = ensure_session_dir(thread_id)
+    try:
+        await _warm_retrieval_resources(thread_id, session_dir)
+    except asyncio.TimeoutError:
+        message = f"商品检索预热超过 {retrieval_warmup_timeout_sec():g}s"
+        with thread_scope(thread_id, session_dir, root_thread_id=thread_id):
+            await monitor.report_error("retrieval_warmup_timeout", message)
+        return AgentResult(status="timeout", thread_id=thread_id, error=message)
+    except Exception as exc:
+        message = f"检索预热失败：{type(exc).__name__}: {exc}"
+        with thread_scope(thread_id, session_dir, root_thread_id=thread_id):
+            await monitor.report_error("retrieval_warmup_error", message)
+        return AgentResult(status="error", thread_id=thread_id, error=message)
+
     try:
         return await asyncio.wait_for(
             _resume_agent_loop(thread_id),

@@ -164,6 +164,7 @@ SHOPPILOT_RETRIEVAL_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
 SHOPPILOT_RETRIEVAL_EMBEDDING_QUERY_PROMPT=
 SHOPPILOT_RETRIEVAL_EMBEDDING_DIMENSION=512
 SHOPPILOT_RETRIEVAL_INDEX_DIR=./data/retrieval
+SHOPPILOT_RETRIEVAL_WARMUP_TIMEOUT_SEC=240
 SHOPPILOT_RETRIEVAL_CANDIDATE_POOL=80
 SHOPPILOT_RETRIEVAL_RRF_K=60
 SHOPPILOT_RETRIEVAL_BM25_WEIGHT=1.5
@@ -190,7 +191,7 @@ SHOPPILOT_KNOWLEDGE_SYNTHESIS_MAX_CLAIMS=6
 SHOPPILOT_KNOWLEDGE_SYNTHESIS_MIN_TOKEN_OVERLAP=0.05
 ```
 
-正式配置使用 `BAAI/bge-small-zh-v1.5` 的 512 维语义向量；测试仍可切换 `hashing` 作为无模型依赖回退。商品按平台和品类建立独立 Faiss HNSW 分区，Embedding 在数据集未变化时从 `data/retrieval/` 缓存复用。`auto` reranker 只有在包内模型与当前 provider/model 完全匹配时才启用 LTR，否则退回规则重排；未知品类不会回退到整个平台商品。
+正式配置使用 `BAAI/bge-small-zh-v1.5` 的 512 维语义向量；测试仍可切换 `hashing` 作为无模型依赖回退。商品按平台和品类建立独立 Faiss HNSW 分区。Embedding 缓存按实际向量文本内容 + provider/model 生成稳定指纹，不再因为 `products.jsonl` 的 mtime 或复制路径变化而无效；BGE 优先从本地 Hugging Face snapshot 加载，只有本地不存在时才访问 Hub。进程首次使用时会在主 Agent 300 秒执行预算开始前预热检索器，并通过 single-flight 锁保证并发四平台 fork 只初始化一份模型/索引。`auto` reranker 只有在包内模型与当前 provider/model 完全匹配时才启用 LTR，否则退回规则重排；未知品类不会回退到整个平台商品。
 
 本地 checkpoint：
 

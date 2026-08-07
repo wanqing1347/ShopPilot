@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import threading
 from collections import Counter
 from functools import lru_cache
 from collections.abc import Sequence
@@ -90,7 +91,15 @@ class SentenceTransformerEmbeddingProvider:
             retrieval_embedding_query_prompt() if query_prompt is None else query_prompt
         )
         self._query_cache: dict[str, list[float]] = {}
-        self._model = SentenceTransformer(self.model_name)
+        # Prefer the already-downloaded Hugging Face snapshot. SentenceTransformer
+        # otherwise performs remote Hub checks even when all model files are local;
+        # on an unavailable/slow network that check costs ~30s, exactly matching the
+        # item_search timeout. Fall back to normal online resolution only when the
+        # model is genuinely absent from the local cache.
+        try:
+            self._model = SentenceTransformer(self.model_name, local_files_only=True)
+        except OSError:
+            self._model = SentenceTransformer(self.model_name)
         get_dimension = getattr(self._model, "get_embedding_dimension", None)
         if get_dimension is None:
             get_dimension = self._model.get_sentence_embedding_dimension
@@ -130,6 +139,9 @@ class SentenceTransformerEmbeddingProvider:
         return result
 
 
+_EMBEDDING_PROVIDER_LOCK = threading.Lock()
+
+
 @lru_cache(maxsize=4)
 def _cached_embedding_provider(
     provider: str,
@@ -146,13 +158,20 @@ def _cached_embedding_provider(
 
 
 def create_embedding_provider() -> EmbeddingProvider:
-    return _cached_embedding_provider(
-        retrieval_embedding_provider(),
-        retrieval_embedding_model(),
-        retrieval_embedding_dimension(),
-        retrieval_embedding_query_prompt(),
-    )
+    # functools.lru_cache is thread-safe for cache bookkeeping, but concurrent
+    # misses are still allowed to execute the wrapped constructor more than once.
+    # Four platform forks can therefore load four SentenceTransformer models on
+    # the first request. Serialize the cache lookup + construction so only one
+    # heavyweight model instance is ever created per cache key.
+    with _EMBEDDING_PROVIDER_LOCK:
+        return _cached_embedding_provider(
+            retrieval_embedding_provider(),
+            retrieval_embedding_model(),
+            retrieval_embedding_dimension(),
+            retrieval_embedding_query_prompt(),
+        )
 
 
 def clear_embedding_provider_cache() -> None:
-    _cached_embedding_provider.cache_clear()
+    with _EMBEDDING_PROVIDER_LOCK:
+        _cached_embedding_provider.cache_clear()

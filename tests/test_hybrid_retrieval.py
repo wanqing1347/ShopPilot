@@ -1,14 +1,67 @@
 from __future__ import annotations
 
+import concurrent.futures
+import time
+from functools import lru_cache
+
+import pytest
+
 from app.recall.bm25 import BM25Index
 from app.recall.catalog import dataset_root
 from app.recall.evaluation import evaluate_retriever, load_evaluation_queries
 from app.recall.hybrid import (
     SearchFilters,
+    _embedding_fingerprint,
+    candidate_text,
     clear_retriever_cache,
     get_hybrid_retriever,
 )
+from app.recall.embeddings import HashingEmbeddingProvider
 from app.recall.tokenizer import tokenize
+
+
+def test_embedding_fingerprint_depends_on_vector_text_not_file_mtime() -> None:
+    from app.recall.catalog import load_catalog
+
+    candidates = list(load_catalog()[:3])
+    texts = [candidate_text(candidate) for candidate in candidates]
+    provider = HashingEmbeddingProvider(dimension=128)
+
+    first, first_digest = _embedding_fingerprint(candidates, texts, provider)
+    second, second_digest = _embedding_fingerprint(candidates, list(texts), provider)
+    changed, changed_digest = _embedding_fingerprint(
+        candidates,
+        [texts[0] + " changed", *texts[1:]],
+        provider,
+    )
+
+    assert first == second
+    assert first_digest == second_digest
+    assert changed != first
+    assert changed_digest != first_digest
+
+
+def test_get_hybrid_retriever_single_flights_concurrent_cache_miss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.recall.hybrid as hybrid
+
+    clear_retriever_cache()
+    build_calls = 0
+
+    @lru_cache(maxsize=4)
+    def slow_cached_retriever(*args):
+        nonlocal build_calls
+        build_calls += 1
+        time.sleep(0.05)
+        return object()
+
+    monkeypatch.setattr(hybrid, "_cached_retriever", slow_cached_retriever)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(lambda _: get_hybrid_retriever(), range(4)))
+
+    assert build_calls == 1
+    assert len({id(result) for result in results}) == 1
 
 
 def test_bm25_tokenizer_ranks_matching_chinese_product() -> None:

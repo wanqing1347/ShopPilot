@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -114,27 +115,89 @@ def _cache_root() -> Path:
     return path.resolve()
 
 
+def _vector_text_digest(candidates: list[Candidate], texts: list[str]) -> str:
+    digest = hashlib.sha256()
+    for candidate, text in zip(candidates, texts, strict=True):
+        digest.update(candidate.item_id.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(text.encode("utf-8"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
 def _embedding_fingerprint(
     candidates: list[Candidate],
+    texts: list[str],
     provider: EmbeddingProvider,
-) -> str:
-    stat = products_file().stat()
+) -> tuple[str, str]:
+    # The old fingerprint included products.jsonl mtime/path. Re-copying or
+    # regenerating an identical catalog therefore invalidated a perfectly valid
+    # multi-minute BGE cache. Fingerprint only the text that actually enters the
+    # document encoder plus the embedding implementation/model.
+    text_digest = _vector_text_digest(candidates, texts)
     material = {
-        "dataset_path": str(products_file()),
-        "dataset_mtime_ns": stat.st_mtime_ns,
-        "dataset_size": stat.st_size,
+        "cache_schema": 2,
+        "vector_text_digest": text_digest,
         "count": len(candidates),
-        "first": candidates[0].item_id if candidates else None,
-        "last": candidates[-1].item_id if candidates else None,
         "provider": provider.name,
-        "model": retrieval_embedding_model()
-        if provider.name == "sentence_transformers"
-        else None,
+        "model": getattr(provider, "model_name", None),
         "dimension": provider.dimension,
     }
-    return hashlib.sha256(
+    fingerprint = hashlib.sha256(
         json.dumps(material, sort_keys=True, ensure_ascii=False).encode("utf-8")
     ).hexdigest()[:24]
+    return fingerprint, text_digest
+
+
+def _legacy_cache_matrix(
+    *,
+    np: Any,
+    candidates: list[Candidate],
+    provider: EmbeddingProvider,
+    cache_root: Path,
+) -> Any | None:
+    """Reuse a pre-v2 cache only when it is provably tied to this catalog snapshot.
+
+    Legacy metadata did not record the model name or text digest. For the current
+    project default BGE model we can still safely migrate the existing cache when:
+    provider/dimension/item ids match exactly and the cache was written after the
+    current products file. Other SentenceTransformer models must rebuild once.
+    """
+
+    if provider.name == "sentence_transformers" and getattr(
+        provider, "model_name", None
+    ) != "BAAI/bge-small-zh-v1.5":
+        return None
+
+    expected_ids = [item.item_id for item in candidates]
+    dataset_mtime = products_file().stat().st_mtime
+    for metadata_path in sorted(
+        cache_root.glob("embeddings-*.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    ):
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if metadata.get("cache_schema") == 2:
+            continue
+        if metadata.get("provider") != provider.name:
+            continue
+        if int(metadata.get("dimension") or 0) != provider.dimension:
+            continue
+        if metadata.get("item_ids") != expected_ids:
+            continue
+        vector_path = metadata_path.with_suffix(".npy")
+        if not vector_path.exists() or vector_path.stat().st_mtime < dataset_mtime:
+            continue
+        try:
+            matrix = np.load(vector_path, allow_pickle=False)
+        except (OSError, ValueError):
+            continue
+        if matrix.shape == (len(candidates), provider.dimension):
+            return matrix.astype("float32")
+    return None
 
 
 def _load_or_create_vectors(
@@ -147,20 +210,35 @@ def _load_or_create_vectors(
     except ImportError:
         return provider.embed_documents(texts), False
 
-    fingerprint = _embedding_fingerprint(candidates, provider)
-    vector_path = _cache_root() / f"embeddings-{fingerprint}.npy"
-    metadata_path = _cache_root() / f"embeddings-{fingerprint}.json"
+    fingerprint, text_digest = _embedding_fingerprint(candidates, texts, provider)
+    cache_root = _cache_root()
+    vector_path = cache_root / f"embeddings-{fingerprint}.npy"
+    metadata_path = cache_root / f"embeddings-{fingerprint}.json"
+    expected_ids = [item.item_id for item in candidates]
     if vector_path.exists() and metadata_path.exists():
         try:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
             matrix = np.load(vector_path, allow_pickle=False)
             if (
                 matrix.shape == (len(candidates), provider.dimension)
-                and metadata.get("item_ids") == [item.item_id for item in candidates]
+                and metadata.get("item_ids") == expected_ids
+                and metadata.get("cache_schema") == 2
+                and metadata.get("provider") == provider.name
+                and metadata.get("model") == getattr(provider, "model_name", None)
+                and metadata.get("vector_text_digest") == text_digest
             ):
                 return matrix.astype("float32").tolist(), True
         except (OSError, ValueError, json.JSONDecodeError):
             pass
+
+    legacy_matrix = _legacy_cache_matrix(
+        np=np,
+        candidates=candidates,
+        provider=provider,
+        cache_root=cache_root,
+    )
+    if legacy_matrix is not None:
+        return legacy_matrix.tolist(), True
 
     vectors = provider.embed_documents(texts)
     matrix = np.asarray(vectors, dtype="float32")
@@ -175,9 +253,12 @@ def _load_or_create_vectors(
     metadata_path.write_text(
         json.dumps(
             {
+                "cache_schema": 2,
                 "provider": provider.name,
+                "model": getattr(provider, "model_name", None),
                 "dimension": provider.dimension,
-                "item_ids": [item.item_id for item in candidates],
+                "vector_text_digest": text_digest,
+                "item_ids": expected_ids,
             },
             ensure_ascii=False,
         ),
@@ -537,6 +618,9 @@ class HybridRetriever:
         )
 
 
+_RETRIEVER_CACHE_LOCK = threading.Lock()
+
+
 @lru_cache(maxsize=4)
 def _cached_retriever(
     dataset_path: str,
@@ -569,7 +653,7 @@ def _cached_retriever(
 
 def get_hybrid_retriever() -> HybridRetriever:
     path = products_file()
-    return _cached_retriever(
+    cache_key = (
         str(path),
         path.stat().st_mtime_ns,
         retrieval_embedding_provider(),
@@ -582,7 +666,14 @@ def get_hybrid_retriever() -> HybridRetriever:
         retrieval_hnsw_ef_search(),
         retrieval_faiss_threads(),
     )
+    # lru_cache can execute the wrapped function multiple times on concurrent
+    # cache misses. Cross-platform forks hit this path together, so serialize the
+    # lookup + build. Threads arriving after the first build observe the cache hit
+    # instead of loading BGE / building Faiss again.
+    with _RETRIEVER_CACHE_LOCK:
+        return _cached_retriever(*cache_key)
 
 
 def clear_retriever_cache() -> None:
-    _cached_retriever.cache_clear()
+    with _RETRIEVER_CACHE_LOCK:
+        _cached_retriever.cache_clear()

@@ -7,14 +7,23 @@ from app.catalog.providers.public_demo import clear_public_demo_cache
 from app.catalog.router import clear_catalog_provider_cache, search_catalog
 from app.tools.price_compare import price_compare
 from app.tools.shipping_calc import shipping_calc
+from app.utils.runtime import PROJECT_ROOT
+
+
+PUBLIC_DEMO_SNAPSHOT = PROJECT_ROOT / "data/public_demo/products.jsonl"
 
 
 @pytest.fixture(autouse=True)
 def reset_public_demo(monkeypatch: pytest.MonkeyPatch):
+    if not PUBLIC_DEMO_SNAPSHOT.exists():
+        pytest.skip(
+            "public_demo 是可选快照测试；未找到 data/public_demo/products.jsonl。"
+            "如需运行，请先执行 scripts/build_public_demo_catalog.py。"
+        )
     monkeypatch.setenv("SHOPPILOT_PUBLIC_DEMO_ENABLED", "true")
     monkeypatch.setenv(
         "SHOPPILOT_PUBLIC_DEMO_DATA_FILE",
-        "data/public_demo/products.jsonl",
+        str(PUBLIC_DEMO_SNAPSHOT),
     )
     clear_public_demo_cache()
     clear_catalog_provider_cache()

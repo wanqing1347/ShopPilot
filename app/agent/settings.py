@@ -311,6 +311,10 @@ def retrieval_index_dir() -> str:
     ).strip()
 
 
+def retrieval_warmup_timeout_sec() -> float:
+    return _float_env("SHOPPILOT_RETRIEVAL_WARMUP_TIMEOUT_SEC", 240.0, minimum=30.0)
+
+
 def retrieval_candidate_pool() -> int:
     return _int_env("SHOPPILOT_RETRIEVAL_CANDIDATE_POOL", 80, minimum=10)
 
