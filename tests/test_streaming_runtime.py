@@ -53,6 +53,61 @@ async def test_agent_streaming_returns_checkpoint_snapshot(
 
 
 @pytest.mark.asyncio
+async def test_leaf_sub_agent_returns_direct_after_scoped_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_model = _ToolCapableFakeChatModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "item_search",
+                        "args": {},
+                        "id": "call-leaf-search",
+                        "type": "tool_call",
+                    }
+                ],
+            )
+        ]
+    )
+    monkeypatch.setattr(graph_runtime, "get_llm", lambda: fake_model)
+
+    state = initial_state(
+        query="只搜 Amazon 咖啡杯",
+        thread_id="leaf-search-test",
+        user_id=None,
+        allowed_platforms=["amazon"],
+        allowed_category="咖啡杯",
+        is_sub_agent=True,
+    )
+    state["plan"] = QueryPlan(
+        original_query="四平台搜索咖啡杯",
+        category="咖啡杯",
+        category_key="coffee_cup",
+        budget_cny=300,
+        platforms=["amazon"],
+        hard_constraints=["不要塑料"],
+        soft_preferences=["偏好小众手作"],
+    )
+
+    result = await graph_runtime.ainvoke_agent(
+        query=state["query"],
+        thread_id="leaf-search-test",
+        system_prompt="Call item_search now.",
+        initial=state,
+        leaf_sub_agent=True,
+    )
+
+    assert list(result.state["search_outputs"]) == ["amazon"]
+    assert result.state["compared"] is None
+    assert result.state["shipping"] is None
+    assert result.state["picker"] is None
+    assert result.state["summary"] is None
+    assert result.state["is_sub_agent"] is True
+
+
+@pytest.mark.asyncio
 async def test_terminal_summary_updates_state_and_stops_loop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

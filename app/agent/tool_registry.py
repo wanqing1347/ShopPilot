@@ -499,9 +499,42 @@ async def dispatch_tool(
     )
 
 
+@tool("item_search", return_direct=True)
+async def scoped_sub_agent_item_search(
+    runtime: ToolRuntime,
+    top_k: int = 20,
+) -> Command:
+    """Search the single platform enforced by a scoped leaf sub-agent state."""
+
+    allowed = [str(value) for value in (runtime.state.get("allowed_platforms") or [])]
+    if len(allowed) != 1:
+        return _command(
+            runtime,
+            tool_name="item_search",
+            content=(
+                "scoped leaf 子 Agent 必须且只能绑定一个平台；"
+                f"当前 allowed_platforms={allowed}。"
+            ),
+        )
+    return await item_search.coroutine(
+        platform=allowed[0],
+        runtime=runtime,
+        query="",
+        category="",
+        top_k=top_k,
+    )
+
+
+@lru_cache(maxsize=1)
+def get_sub_agent_tool_set():
+    """Return the minimal terminal tool set for one-platform leaf workers."""
+
+    return [scoped_sub_agent_item_search]
+
+
 @lru_cache(maxsize=1)
 def get_full_tool_set():
-    """Return the same registered tool objects for main and homogeneous children."""
+    """Return the registered tool objects for the main AgentLoop."""
 
     return [
         planner,

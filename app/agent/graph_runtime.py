@@ -98,23 +98,30 @@ async def stage_tool_permissions(
     return await handler(request.override(tools=selected))
 
 
-async def build_agent(system_prompt: str):
-    """Build the LangChain v1 agent backed by persistent LangGraph state."""
+async def build_agent(
+    system_prompt: str,
+    *,
+    leaf_sub_agent: bool = False,
+):
+    """Build the LangChain v1 agent backed by persistent LangGraph state.
+
+    One-platform child workers use a deliberately tiny terminal tool set. This
+    avoids depending on dynamic stage permissions to stop a child after search,
+    which previously allowed leaf workers to repeat the parent's compare/shipping/
+    picker/summary stages.
+    """
 
     from langchain.agents import create_agent
     from langchain.agents.middleware import ModelCallLimitMiddleware, ToolCallLimitMiddleware
 
-    from app.agent.tool_registry import get_full_tool_set
+    from app.agent.tool_registry import get_full_tool_set, get_sub_agent_tool_set
 
     model = get_llm()
-    return create_agent(
-        model=model,
-        tools=get_full_tool_set(),
-        system_prompt=system_prompt,
-        state_schema=ShopPilotState,
-        checkpointer=await get_checkpointer(),
-        middleware=[
-            stage_tool_permissions,
+    middleware: list[Any] = []
+    if not leaf_sub_agent:
+        middleware.append(stage_tool_permissions)
+    middleware.extend(
+        [
             CacheBreakpointMiddleware(model),
             ModelCallLimitMiddleware(
                 run_limit=max_model_steps(),
@@ -127,7 +134,15 @@ async def build_agent(system_prompt: str):
                 exit_behavior="continue",
             ),
             ToolReliabilityMiddleware(),
-        ],
+        ]
+    )
+    return create_agent(
+        model=model,
+        tools=(get_sub_agent_tool_set() if leaf_sub_agent else get_full_tool_set()),
+        system_prompt=system_prompt,
+        state_schema=ShopPilotState,
+        checkpointer=await get_checkpointer(),
+        middleware=middleware,
     )
 
 
@@ -264,11 +279,12 @@ async def ainvoke_agent(
     thread_id: str,
     system_prompt: str,
     initial: ShopPilotState | dict[str, Any],
+    leaf_sub_agent: bool = False,
 ) -> AgentRunResult:
     """Start a fresh checkpointed AgentLoop and return its final state."""
 
     await monitor.report_stage("think", "Agent 正在根据 checkpoint state 选择下一步工具")
-    agent = await build_agent(system_prompt)
+    agent = await build_agent(system_prompt, leaf_sub_agent=leaf_sub_agent)
     config = _run_config(thread_id)
     input_state = dict(initial)
     input_state["messages"] = [{"role": "user", "content": query}]

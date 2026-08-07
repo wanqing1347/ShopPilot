@@ -1,6 +1,6 @@
 # ShopPilot 跨境电商搜索 Agent
 
-本项目只保留 **LangChain Agent + LangGraph Runtime** 路径。模型通过多轮 Tool Calling 执行 Think → Act → Observe → Reflect，并可通过 `dispatch_tool` 动态 fork 同质子 AgentLoop。
+本项目只保留 **LangChain Agent + LangGraph Runtime** 路径。模型通过多轮 Tool Calling 执行 Think → Act → Observe → Reflect，并可通过 `dispatch_tool` 动态 fork 与主 Agent 共享模型和状态协议的 scoped 子 AgentLoop。
 
 > 文档示例中的 `langgraph.prebuilt.create_react_agent` 已被 LangGraph v1 弃用。本实现使用当前标准 `langchain.agents.create_agent`，底层运行时仍然是 LangGraph。
 
@@ -23,11 +23,11 @@ LangChain create_agent（LangGraph runtime + checkpointer）
   ├── ShoppingSummary（工具结果确定性渲染 + LLM 稳定偏好提取）
   └── dispatch_tool
         ↓
-      同质子 AgentLoop
-      - 同一模型
-      - 同一提示词架构
-      - 同一 FULL_TOOL_SET
-      - 独立 thread_id / checkpoint / ShopPilotState
+      Scoped 子 AgentLoop
+      - 同一模型 / ShopPilotState / checkpoint 协议
+      - 独立 thread_id / checkpoint
+      - 复用父 Agent 已完成的 QueryPlan 与品类洞察
+      - 明确 platform 的叶子任务只暴露终止型 item_search，搜索完成即返回主 Agent
 ```
 
 项目不存在固定工具执行顺序、离线 Agent 流水线或规则 Planner。是否调用工具、调用顺序、是否 fork 和何时终止，都由 AgentLoop 基于当前 Observation 决定。
@@ -41,8 +41,8 @@ LangChain create_agent（LangGraph runtime + checkpointer）
 - checkpoint 支持保留周期、启动清理、周期清理、批量上限、扫描上限和活动任务保护。
 - OpenAI-compatible 模型接入，可使用 DashScope、OpenAI 或 vLLM 兼容服务。
 - LLM 结构化 Planner；ShoppingSummary 使用工具结果确定性渲染，LLM 只提取稳定长期偏好。
-- 主 Agent 与同质子 Agent 多轮工具调用。
-- 主、子 Agent 的计划、召回、比价、物流、精排和总结均进入 `ShopPilotState`，由 checkpoint 持久化。
+- 主 Agent 负责完整多轮工具编排；明确 platform 的 scoped 子 Agent 复用父计划，只承担单平台检索并在 `item_search` 后直接结束，避免重复执行主 Agent 的比价、物流、精排和总结。
+- 主 Agent 的计划、召回、比价、物流、精排和总结，以及子 Agent 的 scoped plan / search evidence 均进入 `ShopPilotState`，由 checkpoint 持久化。
 - fork 深度、全局/单任务并发上限、总预算、排队超时、队列容量和等价子任务去重。
 - 主/子超时、模型调用数、工具调用数和重复调用护栏。
 - Token 级模型流式输出；内部摘要模型和工具内部结构化 LLM 输出不会泄露到用户界面。
