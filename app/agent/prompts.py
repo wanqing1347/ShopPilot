@@ -101,6 +101,25 @@ def get_system_prompt(
     )
 
 
+def get_scoped_search_prompt(demands: str) -> str:
+    """Minimal prompt for a one-platform leaf whose plan is already checkpointed."""
+
+    return (
+        "<role>\n"
+        "你是 ShopPilot 单平台检索叶子 Agent。父 Agent 已经完成需求规划，并把平台、品类、预算、硬约束和偏好写入 checkpoint state。\n"
+        "</role>\n\n"
+        "<sub_task>\n"
+        + demands
+        + "\n</sub_task>\n\n"
+        "<execution_contract>\n"
+        "- 只调用当前唯一可用的 item_search，一次完成当前 scoped platform 的商品检索。\n"
+        "- 不重新规划，不做品类分析，不做比价、物流、精排或最终汇总。\n"
+        "- 不修改平台范围；item_search 会从 checkpoint state 强制读取当前平台和父 Agent 计划。\n"
+        "- item_search 返回后立即结束，把检索证据交还父 Agent。\n"
+        "</execution_contract>"
+    )
+
+
 def get_sub_agent_prompt(
     demands: str,
     long_term_preferences: list[str] | None = None,

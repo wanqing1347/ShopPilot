@@ -60,6 +60,44 @@ def test_terminal_tools_are_return_direct() -> None:
     assert shopping_summary.return_direct is True
 
 
+def test_scoped_sub_agent_has_single_terminal_search_tool() -> None:
+    from app.agent.tool_registry import get_sub_agent_tool_set
+
+    tools = get_sub_agent_tool_set()
+    assert [tool.name for tool in tools] == ["item_search"]
+    assert tools[0].return_direct is True
+    assert set(tools[0].args) == {"top_k"}
+
+
+def test_scoped_sub_agent_reuses_parent_plan_without_mutating_it() -> None:
+    from app.agent.dispatch_tool import _scoped_parent_plan
+    from app.models import QueryPlan
+
+    parent = initial_state(
+        query="四平台咖啡杯",
+        thread_id="parent-plan-test",
+        user_id=None,
+    )
+    parent["plan"] = QueryPlan(
+        original_query=parent["query"],
+        category="咖啡杯",
+        category_key="coffee_cup",
+        budget_cny=300,
+        platforms=["amazon", "shopee", "aliexpress", "ebay"],
+        hard_constraints=["不要塑料"],
+        soft_preferences=["偏好小众手作"],
+    )
+
+    scoped = _scoped_parent_plan(parent, platform="ebay", category=None)
+
+    assert scoped is not None
+    assert scoped.platforms == ["ebay"]
+    assert scoped.category == "咖啡杯"
+    assert scoped.budget_cny == 300
+    assert scoped.hard_constraints == ["不要塑料"]
+    assert parent["plan"].platforms == ["amazon", "shopee", "aliexpress", "ebay"]
+
+
 def test_stage_permissions_follow_checkpointed_state() -> None:
     state = initial_state(
         query="买咖啡杯",

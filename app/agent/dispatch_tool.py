@@ -12,12 +12,12 @@ from app.agent.fork_scheduler import (
     ForkQueueTimeout,
     get_fork_scheduler,
 )
-from app.agent.prompts import get_sub_agent_prompt
+from app.agent.prompts import get_scoped_search_prompt, get_sub_agent_prompt
 from app.agent.settings import sub_agent_timeout_sec
 from app.agent.state import ShopPilotState, initial_state, state_payload
 from app.api.context import get_root_thread_id, get_session_dir
 from app.api.monitor import monitor
-from app.models import Platform
+from app.models import Platform, QueryPlan
 from app.utils.runtime import thread_scope
 
 
@@ -50,6 +50,26 @@ def _build_child_query(
     return demands + "\n\n子任务硬范围：\n- " + "\n- ".join(constraints)
 
 
+def _scoped_parent_plan(
+    parent_state: ShopPilotState | dict[str, Any],
+    *,
+    platform: Platform | None,
+    category: str | None,
+) -> QueryPlan | None:
+    """Reuse the parent's validated plan for one-platform leaf retrieval."""
+
+    raw_plan = parent_state.get("plan")
+    if raw_plan is None:
+        return None
+    plan = raw_plan if isinstance(raw_plan, QueryPlan) else QueryPlan.model_validate(raw_plan)
+    updates: dict[str, Any] = {}
+    if platform is not None:
+        updates["platforms"] = [platform]
+    if category:
+        updates["category"] = category
+    return plan.model_copy(update=updates) if updates else plan
+
+
 async def run_sub_agent(
     *,
     demands: str,
@@ -70,6 +90,13 @@ async def run_sub_agent(
         await monitor.report_fork(sub_thread_id, child_query)
 
         allowed_platforms = [platform] if platform is not None else None
+        scoped_plan = _scoped_parent_plan(
+            parent_state,
+            platform=platform,
+            category=category,
+        )
+        scoped_category = category or (scoped_plan.category if scoped_plan is not None else None)
+        leaf_search_mode = platform is not None and scoped_plan is not None
         child_state = initial_state(
             query=child_query,
             thread_id=sub_thread_id,
@@ -77,13 +104,23 @@ async def run_sub_agent(
             long_term_preferences=parent_state.get("long_term_preferences") or [],
             long_term_memory=parent_state.get("long_term_memory") or [],
             allowed_platforms=allowed_platforms,
-            allowed_category=category,
+            allowed_category=scoped_category,
             is_sub_agent=True,
         )
-        prompt = get_sub_agent_prompt(
-            demands=child_query,
-            long_term_preferences=child_state.get("long_term_preferences") or [],
-            long_term_memory=child_state.get("long_term_memory") or [],
+        if scoped_plan is not None:
+            child_state["plan"] = scoped_plan
+        parent_insight = parent_state.get("insight")
+        if parent_insight is not None:
+            child_state["insight"] = parent_insight
+
+        prompt = (
+            get_scoped_search_prompt(child_query)
+            if leaf_search_mode
+            else get_sub_agent_prompt(
+                demands=child_query,
+                long_term_preferences=child_state.get("long_term_preferences") or [],
+                long_term_memory=child_state.get("long_term_memory") or [],
+            )
         )
 
         # Delayed import avoids graph_runtime -> tool_registry -> dispatch_tool cycle.
@@ -96,6 +133,7 @@ async def run_sub_agent(
                     thread_id=sub_thread_id,
                     system_prompt=prompt,
                     initial=child_state,
+                    leaf_sub_agent=leaf_search_mode,
                 ),
                 timeout=sub_agent_timeout_sec(),
             )
