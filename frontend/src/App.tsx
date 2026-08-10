@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import EvaluationPanel, { type TrajectoryEvaluation } from "./EvaluationPanel";
 import MarkdownContent from "./MarkdownContent";
@@ -94,24 +94,159 @@ function formatBudget(value: number | null | undefined): string | null {
   return `预算 ¥${value.toFixed(0)}`;
 }
 
+const stageLabels: Record<string, string> = {
+  prepare: "准备",
+  resume: "恢复",
+  think: "决策",
+  act: "执行",
+  observe: "观察结果",
+  reflect: "总结",
+};
+
+const timelineGroupMeta: Record<string, { title: string; description: string }> = {
+  session: { title: "会话准备", description: "创建会话、恢复状态并召回长期偏好" },
+  think: { title: "Agent 决策", description: "模型分析当前状态，决定下一步动作" },
+  act: { title: "工具与并行检索", description: "调用商品检索、知识检索、比价和子 Agent" },
+  context: { title: "上下文与可靠性", description: "压缩上下文、复用结果或处理瞬时故障" },
+  finish: { title: "总结与完成", description: "整理结果、更新记忆并返回最终答案" },
+  error: { title: "异常与取消", description: "任务异常、取消或可恢复的降级" },
+};
+
+function eventGroupId(event: AguiEvent): string {
+  if (event.event === "session_created") return "session";
+  if (event.event === "stage") {
+    const stage = String(event.data?.stage ?? "");
+    if (stage === "think") return "think";
+    if (stage === "reflect") return "finish";
+    return "session";
+  }
+  if (["assistant_call"].includes(event.event)) return "think";
+  if (["task_result", "memory_updated"].includes(event.event)) return "finish";
+  if (["error", "task_cancelled"].includes(event.event)) return "error";
+  if (["context_compaction", "context_compaction_failed", "prompt_cache"].includes(event.event)) {
+    return "context";
+  }
+  return "act";
+}
+
+function actorLabel(value: unknown): string {
+  const actor = String(value ?? "main");
+  if (actor === "main") return "主 Agent";
+  return `子 Agent · ${actor.slice(0, 8)}`;
+}
+
+function eventDetail(event: AguiEvent): string {
+  const data = event.data ?? {};
+  const details: string[] = [];
+  if (event.event === "stage" && data.stage) details.push(`阶段：${stageLabels[String(data.stage)] ?? String(data.stage)}`);
+  if (data.tool_calls && Array.isArray(data.tool_calls) && data.tool_calls.length > 0) {
+    details.push(`工具：${data.tool_calls.map(String).join("、")}`);
+  }
+  if (data.tool_name) details.push(`工具：${String(data.tool_name)}`);
+  if (data.platform) details.push(`平台：${String(data.platform)}`);
+  if (data.category_key) details.push(`品类：${String(data.category_key)}`);
+  if (data.returned_count != null) details.push(`返回 ${String(data.returned_count)} 条候选`);
+  if (data.claim_count != null) details.push(`${String(data.claim_count)} 条依据`);
+  if (data.duration_ms != null) details.push(`${String(data.duration_ms)} ms`);
+  if (data.wait_ms != null) details.push(`排队 ${String(data.wait_ms)} ms`);
+  if (data.attempt != null && data.max_attempts != null) details.push(`第 ${String(data.attempt)}/${String(data.max_attempts)} 次`);
+  if (data.count != null) details.push(`${String(data.count)} 条记忆`);
+  if (data.reason) details.push(`原因：${String(data.reason)}`);
+  return details.join(" · ");
+}
+
+function hasEventData(data: Record<string, unknown>): boolean {
+  return Object.keys(data).some((key) => key !== "actor_thread_id");
+}
+
 function EventTimeline({ events, emptyText }: { events: AguiEvent[]; emptyText: string }) {
+  const groups = useMemo(() => {
+    const grouped = new Map<string, AguiEvent[]>();
+    events.forEach((event) => {
+      const id = eventGroupId(event);
+      grouped.set(id, [...(grouped.get(id) ?? []), event]);
+    });
+    return Array.from(grouped.entries()).map(([id, groupEvents]) => ({ id, events: groupEvents }));
+  }, [events]);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    const latest = groups.length > 0 ? groups[groups.length - 1].id : undefined;
+    if (!latest) return;
+    setExpanded((previous) => (previous[latest] ? previous : { ...previous, [latest]: true }));
+  }, [groups]);
+
+  function toggleGroup(id: string) {
+    setExpanded((previous) => ({ ...previous, [id]: !previous[id] }));
+  }
+
+  function setAllGroups(next: boolean) {
+    setExpanded(Object.fromEntries(groups.map((group) => [group.id, next])));
+  }
+
   return (
     <div className="timeline">
       {events.length === 0 && <p className="muted">{emptyText}</p>}
-      {events.map((event, index) => {
-        const data = event.data ?? {};
+      {events.length > 0 && (
+        <div className="timeline-toolbar">
+          <span>已将 {events.length} 条事件整理为 {groups.length} 个阶段</span>
+          <div>
+            <button className="timeline-action" onClick={() => setAllGroups(true)} type="button">全部展开</button>
+            <button className="timeline-action" onClick={() => setAllGroups(false)} type="button">全部折叠</button>
+          </div>
+        </div>
+      )}
+      {groups.map((group, groupIndex) => {
+        const meta = timelineGroupMeta[group.id] ?? { title: group.id, description: "执行事件" };
+        const isExpanded = Boolean(expanded[group.id]);
+        const isLatest = groupIndex === groups.length - 1;
         return (
-          <article className={`event event-${event.event}`} key={`${event.timestamp ?? "event"}-${index}`}>
-            <span className="badge">{labels[event.event] ?? event.event}</span>
-            <div>
-              <strong>{event.message}</strong>
-              <small>
-                {String(data.actor_thread_id ?? data.sub_thread_id ?? "main")}
-                {data.duration_ms ? ` · ${String(data.duration_ms)} ms` : ""}
-                {data.wait_ms ? ` · 排队 ${String(data.wait_ms)} ms` : ""}
-              </small>
-            </div>
-          </article>
+          <section className={`timeline-group ${isLatest ? "timeline-group-latest" : ""}`} key={group.id}>
+            <button
+              className="timeline-group-toggle"
+              onClick={() => toggleGroup(group.id)}
+              type="button"
+              aria-expanded={isExpanded}
+            >
+              <span className="timeline-step">{groupIndex + 1}</span>
+              <span className="timeline-group-copy">
+                <strong>{meta.title}</strong>
+                <small>{meta.description}</small>
+              </span>
+              <span className="timeline-group-count">{group.events.length} 条</span>
+              <span className="timeline-chevron" aria-hidden="true">{isExpanded ? "−" : "+"}</span>
+            </button>
+            {isExpanded && (
+              <div className="timeline-group-events">
+                {group.events.map((event, index) => {
+                  const data = event.data ?? {};
+                  const detail = eventDetail(event);
+                  return (
+                    <article className={`event event-${event.event}`} key={`${event.timestamp ?? "event"}-${index}`}>
+                      <span className="event-marker" aria-hidden="true" />
+                      <div className="event-content">
+                        <div className="event-heading">
+                          <span className="badge">{labels[event.event] ?? event.event}</span>
+                          <strong>{event.message}</strong>
+                        </div>
+                        <small>
+                          {actorLabel(data.actor_thread_id ?? data.sub_thread_id)}
+                          {detail ? ` · ${detail}` : ""}
+                          {event.timestamp ? ` · ${formatDate(event.timestamp)}` : ""}
+                        </small>
+                        {hasEventData(data) && (
+                          <details className="event-details">
+                            <summary>查看原始数据</summary>
+                            <pre>{JSON.stringify(data, null, 2)}</pre>
+                          </details>
+                        )}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </section>
         );
       })}
     </div>
@@ -311,7 +446,10 @@ function SearchPage({ onOpenHistory }: { onOpenHistory: (threadId: string) => vo
           {finalAnswer ? (
             <MarkdownContent source={finalAnswer} />
           ) : (
-            <pre className="streaming-output">{streamingAnswer}</pre>
+            <div className="streaming-output" aria-live="polite">
+              <MarkdownContent source={streamingAnswer} />
+              <span className="streaming-caret" aria-hidden="true" />
+            </div>
           )}
           <div className="files">
             {files.map((filename) => (
