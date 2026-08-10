@@ -15,20 +15,54 @@ function isTableDivider(line: string): boolean {
 }
 
 function renderInline(text: string): ReactNode[] {
-  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+  const parts = text.split(/(\*\*[^*]+\*\*|__[^_]+__|~~[^~]+~~|`[^`]+`|\[[^\]]+\]\([^\s)]+\))/g);
 
   return parts.map((part, index) => {
-    if (part.startsWith("**") && part.endsWith("**")) {
+    if ((part.startsWith("**") && part.endsWith("**")) || (part.startsWith("__") && part.endsWith("__"))) {
       return <strong key={index}>{part.slice(2, -2)}</strong>;
+    }
+    if (part.startsWith("~~") && part.endsWith("~~")) {
+      return <del key={index}>{part.slice(2, -2)}</del>;
     }
     if (part.startsWith("`") && part.endsWith("`")) {
       return <code key={index}>{part.slice(1, -1)}</code>;
+    }
+    const link = part.match(/^\[([^\]]+)\]\(([^\s)]+)\)$/);
+    if (link) {
+      return (
+        <a href={link[2]} key={index} target="_blank" rel="noreferrer">
+          {link[1]}
+        </a>
+      );
     }
     return <Fragment key={index}>{part}</Fragment>;
   });
 }
 
+function isJsonDocument(source: string): boolean {
+  const trimmed = source.trim();
+  if (!trimmed || (!trimmed.startsWith("{") && !trimmed.startsWith("["))) return false;
+  try {
+    JSON.parse(trimmed);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export default function MarkdownContent({ source }: { source: string }) {
+  if (isJsonDocument(source)) {
+    try {
+      return (
+        <pre className="structured-output" aria-live="polite">
+          {JSON.stringify(JSON.parse(source), null, 2)}
+        </pre>
+      );
+    } catch {
+      // Fall through to the plain-text renderer if the stream is between JSON chunks.
+    }
+  }
+
   const lines = source.replace(/\r\n?/g, "\n").split("\n");
   const blocks: ReactNode[] = [];
   let index = 0;
@@ -37,6 +71,47 @@ export default function MarkdownContent({ source }: { source: string }) {
     const line = lines[index].trim();
 
     if (!line) {
+      index += 1;
+      continue;
+    }
+
+    const fenced = line.match(/^```\s*([\w+-]*)\s*$/);
+    if (fenced) {
+      const language = fenced[1] || "text";
+      const codeLines: string[] = [];
+      index += 1;
+      while (index < lines.length && !/^```\s*$/.test(lines[index].trim())) {
+        codeLines.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) index += 1;
+      blocks.push(
+        <div className="markdown-code-wrap" key={`code-${index}`}>
+          <span className="markdown-code-language">{language}</span>
+          <pre><code>{codeLines.join("\n")}</code></pre>
+        </div>,
+      );
+      continue;
+    }
+
+    if (/^>\s?/.test(line)) {
+      const quoteLines: string[] = [];
+      while (index < lines.length && /^>\s?/.test(lines[index].trim())) {
+        quoteLines.push(lines[index].trim().replace(/^>\s?/, ""));
+        index += 1;
+      }
+      blocks.push(
+        <blockquote key={`quote-${index}`}>
+          {quoteLines.map((quoteLine, quoteIndex) => (
+            <p key={quoteIndex}>{renderInline(quoteLine)}</p>
+          ))}
+        </blockquote>,
+      );
+      continue;
+    }
+
+    if (/^(-{3,}|\*{3,})$/.test(line)) {
+      blocks.push(<hr key={`rule-${index}`} />);
       index += 1;
       continue;
     }
@@ -130,8 +205,19 @@ export default function MarkdownContent({ source }: { source: string }) {
       continue;
     }
 
-    blocks.push(<p key={`paragraph-${index}`}>{renderInline(line)}</p>);
+    const paragraphLines = [line];
     index += 1;
+    while (index < lines.length) {
+      const nextLine = lines[index].trim();
+      if (!nextLine || /^(#{1,6})\s+/.test(nextLine) || /^[-*]\s+/.test(nextLine) || /^\d+[.)]\s+/.test(nextLine)) {
+        break;
+      }
+      if (nextLine.includes("|") && index + 1 < lines.length && isTableDivider(lines[index + 1])) break;
+      if (/^```\s*/.test(nextLine) || /^>\s?/.test(nextLine)) break;
+      paragraphLines.push(nextLine);
+      index += 1;
+    }
+    blocks.push(<p key={`paragraph-${index}`}>{renderInline(paragraphLines.join("\n"))}</p>);
   }
 
   return <div className="markdown-content">{blocks}</div>;
