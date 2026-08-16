@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 
+from app.agent.settings import dataset_dir
 from app.catalog.base import CatalogSearchRequest, CatalogSearchResult
+from app.recall.catalog import resolve_dataset_root
 from app.recall.hybrid import (
     SearchFilters,
     exclusions_from_constraints,
@@ -11,8 +13,8 @@ from app.recall.hybrid import (
 
 
 class SyntheticCatalogProvider:
-    name = "synthetic_hybrid"
-    supported_platforms = {"amazon", "shopee", "aliexpress", "ebay"}
+    name = "offline_snapshot"
+    supported_platforms = {"amazon", "walmart", "ebay"}
 
     async def search(self, request: CatalogSearchRequest) -> CatalogSearchResult:
         if request.platform not in self.supported_platforms:
@@ -24,16 +26,18 @@ class SyntheticCatalogProvider:
                 diagnostics={
                     "catalog_provider": self.name,
                     "catalog_live": False,
-                    "mode": "synthetic",
+                    "mode": "offline_snapshot",
                     "eligible_count": 0,
                     "returned_count": 0,
-                    "synthetic_partition_available": False,
+                    "offline_partition_available": False,
                     "unsupported_platform": request.platform,
                     "resolved_category_key": request.category_key,
                 },
             )
 
-        retriever = await asyncio.to_thread(get_hybrid_retriever)
+        configured_dataset_dir = resolve_dataset_root(dataset_dir())
+        provider_name = self.name
+        retriever = await asyncio.to_thread(get_hybrid_retriever, configured_dataset_dir)
         result = await asyncio.to_thread(
             retriever.search,
             query=request.query,
@@ -51,8 +55,9 @@ class SyntheticCatalogProvider:
         )
         diagnostics = {
             **result.diagnostics,
-            "catalog_provider": self.name,
+            "catalog_provider": provider_name,
             "catalog_live": False,
+            "catalog_snapshot": True,
             "top_scores": [
                 {
                     "item_id": hit.candidate.item_id,
@@ -69,7 +74,7 @@ class SyntheticCatalogProvider:
         return CatalogSearchResult(
             candidates=[hit.candidate for hit in result.hits],
             total_candidates=result.total_candidates,
-            provider=self.name,
+            provider=provider_name,
             live=False,
             diagnostics=diagnostics,
         )

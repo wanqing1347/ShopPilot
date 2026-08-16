@@ -1,0 +1,25 @@
+{
+  "dataset_name": "shoppilot_sigir_behavior_simulation",
+  "source_dataset": "SIGIR-ecom-data-challenge",
+  "source_policy": "non-commercial research and education only; do not redistribute raw data",
+  "behavior_origin": "sigir_simulation",
+  "mapping_strategy": "deterministic anonymous SIGIR SKU hash to current catalog same_group_id",
+  "query_text_strategy": "category label template because SIGIR search queries are vectors, not natural-language text",
+  "max_search_rows": 20000,
+  "max_browsing_rows": 50000,
+  "source_rows_read": {
+    "search": 20000,
+    "browsing": 50000
+  },
+  "output_counts": {
+    "queries": 3533,
+    "interactions": 85692,
+    "users": 15425,
+    "events_by_type": {
+      "click": 26033,
+      "impression": 59538,
+      "purchase": 121
+    }
+  },
+  "platform_note": "platform=public_demo because SIGIR is not an Amazon/Walmart/eBay source"
+}

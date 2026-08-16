@@ -8,17 +8,29 @@ from app.models import LandedCost, PricePoint, ShippingCalcOutput
 
 DUTY_TABLE: dict[str, tuple[float, Literal["免征", "标准", "高税"]]] = {
     "amazon": (0.13, "标准"),
+    "amazon_jp": (0.13, "标准"),
     "shopee": (0.06, "免征"),
     "aliexpress": (0.13, "标准"),
     "ebay": (0.20, "高税"),
+    # Cached open-dataset platforms use the same demo-only landed-cost model.
+    # These are estimates, not destination-specific customs rulings.
+    "lazada": (0.06, "免征"),
+    "rakuten": (0.13, "标准"),
+    "shein": (0.13, "标准"),
+    "walmart": (0.13, "标准"),
     "public_demo": (0.0, "免征"),
 }
 
 SHIPPING_TABLE: dict[str, list[tuple[float, float, int]]] = {
     "amazon": [(0, 85, 12), (0.5, 130, 10), (2.0, 240, 8)],
+    "amazon_jp": [(0, 95, 14), (0.5, 150, 12), (2.0, 280, 10)],
     "shopee": [(0, 35, 9), (0.5, 60, 9), (2.0, 120, 7)],
     "aliexpress": [(0, 20, 25), (0.5, 40, 22), (2.0, 90, 18)],
     "ebay": [(0, 90, 14), (0.5, 150, 12), (2.0, 300, 10)],
+    "lazada": [(0, 35, 12), (0.5, 60, 10), (2.0, 120, 8)],
+    "rakuten": [(0, 95, 14), (0.5, 150, 12), (2.0, 280, 10)],
+    "shein": [(0, 30, 10), (0.5, 55, 9), (2.0, 110, 7)],
+    "walmart": [(0, 85, 14), (0.5, 130, 12), (2.0, 240, 10)],
     "public_demo": [(0, 0, 0)],
 }
 

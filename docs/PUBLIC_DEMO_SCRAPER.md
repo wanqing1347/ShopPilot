@@ -162,7 +162,7 @@ Planner 会将以下表达映射为 `public_demo`：
 模拟电商目录
 ```
 
-用户不指定平台时，Planner 默认只使用 `amazon`、`shopee`、`aliexpress`、`ebay` 四个离线合成平台分区；`public_demo` 仅在用户明确要求演示商城/模拟电商目录时加入。
+用户不指定平台时，Planner 默认使用 `amazon`、`shopee`、`aliexpress`、`ebay` 四个离线合成平台分区，以及 Lazada、SHEIN、Walmart 缓存开放数据快照；`public_demo` 仅在用户明确要求演示商城/模拟电商目录时加入。
 
 ## 7. 输出展示口径
 

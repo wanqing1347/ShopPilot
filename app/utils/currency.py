@@ -14,6 +14,9 @@ FX_RATES: Final[dict[str, float]] = {
     # Static demo-only rates used by the public test catalog builders.
     "CAD": 5.15,
     "INR": 0.086,
+    # Static demo-only rates for the cached open marketplace dataset.
+    "IDR": 0.00045,
+    "MXN": 0.42,
 }
 
 
