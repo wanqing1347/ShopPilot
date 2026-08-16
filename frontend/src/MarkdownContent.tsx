@@ -1,12 +1,25 @@
 import { Fragment, type ReactNode } from "react";
 
 function splitTableRow(line: string): string[] {
-  return line
-    .trim()
-    .replace(/^\|/, "")
-    .replace(/\|$/, "")
-    .split("|")
-    .map((cell) => cell.trim());
+  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  const cells: string[] = [];
+  let cell = "";
+
+  for (let index = 0; index < trimmed.length; index += 1) {
+    const character = trimmed[index];
+    if (character === "\\" && trimmed[index + 1] === "|") {
+      cell += "|";
+      index += 1;
+    } else if (character === "|") {
+      cells.push(cell.trim());
+      cell = "";
+    } else {
+      cell += character;
+    }
+  }
+
+  cells.push(cell.trim());
+  return cells;
 }
 
 function isTableDivider(line: string): boolean {
@@ -50,12 +63,24 @@ function isJsonDocument(source: string): boolean {
   }
 }
 
+function cleanDisplayMarkdown(source: string): string {
+  return source
+    .split("\n")
+    .filter((line) => !/^\s*预算检查：/.test(line.trim()))
+    .filter((line) => !/^\s*>\s*当前商品可能来自/.test(line.trim()))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 export default function MarkdownContent({ source }: { source: string }) {
-  if (isJsonDocument(source)) {
+  const displaySource = cleanDisplayMarkdown(source);
+
+  if (isJsonDocument(displaySource)) {
     try {
       return (
         <pre className="structured-output" aria-live="polite">
-          {JSON.stringify(JSON.parse(source), null, 2)}
+          {JSON.stringify(JSON.parse(displaySource), null, 2)}
         </pre>
       );
     } catch {
@@ -63,7 +88,7 @@ export default function MarkdownContent({ source }: { source: string }) {
     }
   }
 
-  const lines = source.replace(/\r\n?/g, "\n").split("\n");
+  const lines = displaySource.replace(/\r\n?/g, "\n").split("\n");
   const blocks: ReactNode[] = [];
   let index = 0;
 
