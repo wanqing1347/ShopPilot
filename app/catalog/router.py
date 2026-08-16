@@ -10,6 +10,7 @@ from app.catalog.providers.public_demo import (
     clear_public_demo_cache,
 )
 from app.catalog.providers.synthetic import SyntheticCatalogProvider
+from app.recall.hybrid import clear_retriever_cache
 
 
 @lru_cache(maxsize=1)
@@ -26,12 +27,13 @@ def clear_catalog_provider_cache() -> None:
     _public_demo_provider.cache_clear()
     _synthetic_provider.cache_clear()
     clear_public_demo_cache()
+    clear_retriever_cache()
 
 
 async def search_catalog(request: CatalogSearchRequest) -> CatalogSearchResult:
-    """Route requests to the two currently usable local data sources.
+    """Route requests to the optional public demo and local offline snapshot.
 
-    The four marketplace labels in the synthetic dataset represent offline,
+    The three marketplace labels in the synthetic dataset represent offline,
     large-marketplace-style product partitions. They are suitable for demos and
     evaluation, but are never presented as live official-platform results.
 
@@ -51,7 +53,7 @@ async def search_catalog(request: CatalogSearchRequest) -> CatalogSearchResult:
                     "catalog_fallback_reason": fallback.fallback_reason,
                     "catalog_provider_chain": [
                         "public_demo_catalog_snapshot",
-                        "synthetic_hybrid",
+                        "offline_snapshot",
                     ],
                 }
             )

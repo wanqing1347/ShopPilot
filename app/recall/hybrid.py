@@ -32,7 +32,7 @@ from app.agent.settings import (
 )
 from app.models import Candidate, Platform
 from app.recall.bm25 import BM25Index
-from app.recall.catalog import load_catalog, products_file
+from app.recall.catalog import load_catalog_from_dir, products_file, resolve_dataset_root
 from app.recall.embeddings import EmbeddingProvider, create_embedding_provider
 from app.recall.ltr import (
     LearnedReranker,
@@ -155,6 +155,7 @@ def _legacy_cache_matrix(
     candidates: list[Candidate],
     provider: EmbeddingProvider,
     cache_root: Path,
+    dataset_path: Path | None = None,
 ) -> Any | None:
     """Reuse a pre-v2 cache only when it is provably tied to this catalog snapshot.
 
@@ -170,7 +171,7 @@ def _legacy_cache_matrix(
         return None
 
     expected_ids = [item.item_id for item in candidates]
-    dataset_mtime = products_file().stat().st_mtime
+    dataset_mtime = (dataset_path or products_file()).stat().st_mtime
     for metadata_path in sorted(
         cache_root.glob("embeddings-*.json"),
         key=lambda path: path.stat().st_mtime,
@@ -204,6 +205,7 @@ def _load_or_create_vectors(
     candidates: list[Candidate],
     texts: list[str],
     provider: EmbeddingProvider,
+    dataset_path: Path | None = None,
 ) -> tuple[list[list[float]], bool]:
     try:
         import numpy as np
@@ -236,6 +238,7 @@ def _load_or_create_vectors(
         candidates=candidates,
         provider=provider,
         cache_root=cache_root,
+        dataset_path=dataset_path,
     )
     if legacy_matrix is not None:
         return legacy_matrix.tolist(), True
@@ -302,7 +305,12 @@ def exclusions_from_constraints(constraints: list[str] | None) -> tuple[str, ...
 
 
 class HybridRetriever:
-    def __init__(self, candidates: list[Candidate]) -> None:
+    def __init__(
+        self,
+        candidates: list[Candidate],
+        *,
+        dataset_path: Path | None = None,
+    ) -> None:
         if not candidates:
             raise ValueError("无法为零商品构建检索索引")
         self.candidates = candidates
@@ -312,6 +320,7 @@ class HybridRetriever:
             candidates,
             self.texts,
             self.provider,
+            dataset_path=dataset_path,
         )
         grouped: dict[tuple[str | None, str | None], list[int]] = {}
         self.category_aliases: dict[str, str] = {}
@@ -623,6 +632,7 @@ _RETRIEVER_CACHE_LOCK = threading.Lock()
 
 @lru_cache(maxsize=4)
 def _cached_retriever(
+    dataset_dir: str,
     dataset_path: str,
     dataset_mtime_ns: int,
     provider_name: str,
@@ -648,11 +658,20 @@ def _cached_retriever(
         hnsw_ef_search,
         faiss_threads,
     )
-    return HybridRetriever(list(load_catalog()))
+    resolved_dataset_dir = Path(dataset_dir)
+    return HybridRetriever(
+        list(load_catalog_from_dir(resolved_dataset_dir)),
+        dataset_path=resolved_dataset_dir / "products.jsonl",
+    )
 
 
-def get_hybrid_retriever() -> HybridRetriever:
-    path = products_file()
+def get_hybrid_retriever(dataset_dir: str | Path | None = None) -> HybridRetriever:
+    resolved_dataset_dir = (
+        resolve_dataset_root(dataset_dir)
+        if dataset_dir is not None
+        else resolve_dataset_root(products_file().parent)
+    )
+    path = resolved_dataset_dir / "products.jsonl"
     cache_key = (
         str(path),
         path.stat().st_mtime_ns,
@@ -671,7 +690,7 @@ def get_hybrid_retriever() -> HybridRetriever:
     # lookup + build. Threads arriving after the first build observe the cache hit
     # instead of loading BGE / building Faiss again.
     with _RETRIEVER_CACHE_LOCK:
-        return _cached_retriever(*cache_key)
+        return _cached_retriever(str(resolved_dataset_dir), *cache_key)
 
 
 def clear_retriever_cache() -> None:

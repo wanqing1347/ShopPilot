@@ -9,6 +9,15 @@ from app.models import Candidate, Platform
 from app.utils.runtime import PROJECT_ROOT
 
 
+def resolve_dataset_root(configured: str | Path) -> Path:
+    configured_path = Path(configured).expanduser()
+    return (
+        configured_path.resolve()
+        if configured_path.is_absolute()
+        else (PROJECT_ROOT / configured_path).resolve()
+    )
+
+
 def dataset_root() -> Path:
     configured = Path(dataset_dir()).expanduser()
     return configured.resolve() if configured.is_absolute() else (PROJECT_ROOT / configured).resolve()
@@ -56,15 +65,16 @@ def _load_catalog(
     return tuple(rows)
 
 
-def load_catalog() -> tuple[Candidate, ...]:
-    path = products_file()
+def load_catalog_from_dir(directory: str | Path) -> tuple[Candidate, ...]:
+    root = resolve_dataset_root(directory)
+    path = root / "products.jsonl"
     if not path.exists():
         raise FileNotFoundError(
             "未找到 ShopPilot 商品数据集。请生成数据后设置 "
             f"SHOPPILOT_DATASET_DIR；当前路径: {path}"
         )
 
-    summary_path = dataset_summary_file()
+    summary_path = root / "dataset_summary.json"
     if not summary_path.exists():
         raise FileNotFoundError(f"缺少 dataset_summary.json: {summary_path}")
     try:
@@ -79,6 +89,10 @@ def load_catalog() -> tuple[Candidate, ...]:
         )
 
     return _load_catalog(str(path), path.stat().st_mtime_ns, expected_schema)
+
+
+def load_catalog() -> tuple[Candidate, ...]:
+    return load_catalog_from_dir(dataset_root())
 
 
 def catalog_for_platform(

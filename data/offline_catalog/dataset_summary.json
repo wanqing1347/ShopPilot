@@ -1,0 +1,17 @@
+{
+  "dataset_name": "shoppilot_offline_catalog",
+  "schema_version": 2,
+  "generated_at": "2026-08-15T14:27:00.807814Z",
+  "purpose": "offline cached marketplace snapshots; not current inventory",
+  "output_counts": {
+    "offline_snapshot": 6616
+  },
+  "total": 6616,
+  "platform_counts": {
+    "amazon": 2093,
+    "ebay": 1523,
+    "walmart": 3000
+  },
+  "verification_status": "cached",
+  "output": "D:\\WanDaoFiles\\DingDing\\电商搜索Agent-进阶部分\\ShopPilot\\data\\offline_catalog\\products.jsonl"
+}

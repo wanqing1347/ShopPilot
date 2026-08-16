@@ -40,7 +40,7 @@ def _bool_env(name: str, default: bool) -> bool:
 
 
 def dataset_dir() -> str:
-    return (_env("SHOPPILOT_DATASET_DIR", "data/merged_catalog") or "data/merged_catalog").strip()
+    return (_env("SHOPPILOT_DATASET_DIR", "data/offline_catalog") or "data/offline_catalog").strip()
 
 
 def dataset_schema_version() -> int:

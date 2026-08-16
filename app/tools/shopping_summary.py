@@ -25,7 +25,7 @@ _PREFERENCE_PROMPT = """你只负责从购物请求中提取值得跨会话保�
 """
 
 _TEMPORARY_PREFERENCE_RE = re.compile(
-    r"\d|预算|元|amazon|shopee|aliexpress|ebay|public_demo|演示商城|模拟电商目录|本次|这次|今天|明天|具体商品",
+    r"\d|预算|元|amazon|amazon_jp|shopee|rakuten|ebay|lazada|shein|walmart|public_demo|演示商城|模拟电商目录|本次|这次|今天|明天|具体商品",
     re.IGNORECASE,
 )
 
@@ -34,15 +34,22 @@ def _escape_markdown(value: str) -> str:
     return " ".join(value.replace("|", "\\|").split())
 
 
-def _platform_label(platform: object) -> str:
-    labels = {
-        "amazon": "模拟 Amazon",
-        "shopee": "模拟 Shopee",
-        "aliexpress": "模拟 AliExpress",
-        "ebay": "模拟 eBay",
-        "public_demo": "模拟电商目录",
-    }
-    return labels.get(str(platform), str(platform))
+_PLATFORM_NAMES = {
+    "amazon": "Amazon",
+    "amazon_jp": "Amazon JP",
+    "shopee": "Shopee",
+    "aliexpress": "AliExpress",
+    "ebay": "eBay",
+    "lazada": "Lazada",
+    "rakuten": "Rakuten",
+    "shein": "SHEIN",
+    "walmart": "Walmart",
+}
+
+
+def _platform_label(item: object) -> str:
+    platform = str(getattr(item, "platform", ""))
+    return _PLATFORM_NAMES.get(platform, "公开演示商城" if platform == "public_demo" else platform)
 
 
 def _source_label(item) -> str:
@@ -56,7 +63,7 @@ def _source_label(item) -> str:
         return "用户提供"
     if item.verification_status == "public_demo":
         return "模拟电商商品目录（非真实交易平台）"
-    return "离线合成商品数据"
+    return "离线缓存商品快照"
 
 
 def _stable_preferences(plan: QueryPlan, model_values: list[str]) -> list[str]:
@@ -100,7 +107,7 @@ def _render_summary(picker: ItemPickerOutput, plan: QueryPlan) -> str:
                 + " | ".join(
                     [
                         str(rank),
-                        _escape_markdown(_platform_label(item.platform)),
+                        _escape_markdown(_platform_label(item)),
                         _escape_markdown(item.title),
                         f"{item.landed_cny:.2f}",
                         _escape_markdown(_source_label(item)),
@@ -132,8 +139,9 @@ def _render_summary(picker: ItemPickerOutput, plan: QueryPlan) -> str:
     lines.extend(
         [
             "",
-            "> 当前商品来自模拟 Amazon/Shopee/AliExpress/eBay 等大电商平台风格的离线合成数据，"
-            "或模拟电商商品目录；并非真实交易平台的实时库存或结算报价，运费、汇率与税费为演示估算。",
+            "> 当前商品可能来自 Amazon/Walmart/eBay 的在线查询或同名离线缓存回退；"
+            "离线结果并非实时库存或结算报价，"
+            "运费、汇率与税费为演示估算。",
         ]
     )
     return "\n".join(lines)
@@ -147,9 +155,9 @@ def _append_grounded_evidence(
         return final_text
     return (
         final_text.rstrip()
-        + "\n\n### 品类依据（合成知识库）\n"
+        + "\n\n### 品类依据（项目知识库）\n"
         + insight.grounded_answer.strip()
-        + "\n\n> 上述品类依据来自项目合成知识文档与合成商品目录统计，不代表真实平台市场。"
+        + "\n\n> 上述品类依据来自项目知识文档与离线快照统计，不代表实时平台市场。"
     )
 
 

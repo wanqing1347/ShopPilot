@@ -6,9 +6,14 @@ from pydantic import BaseModel, Field
 
 Platform = Literal[
     "amazon",
+    "amazon_jp",
     "shopee",
     "aliexpress",
     "ebay",
+    "rakuten",
+    "walmart",
+    "lazada",
+    "shein",
     "public_demo",
 ]
 

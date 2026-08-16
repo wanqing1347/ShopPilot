@@ -2,12 +2,12 @@
 
 ## 1. 当前结论
 
-项目已移除无法获得有效凭证的 eBay Browse API 和 Rakuten Ichiba API 运行路径。当前保留两类可稳定复现的数据源：
+项目当前使用本地离线快照与可选 public_demo 目录两条路径。离线快照用于稳定复现，public_demo 只在显式开启后调用：
 
-1. `synthetic_hybrid`：1,200 条离线合成商品，用于六个基准品类的搜索、排序、评测和跨平台比较；
-2. `public_demo_catalog_snapshot`：1,000 条多来源公开测试、模拟商城和开放价格数据，用于补充综合品类和验证数据采集链路。
+1. `offline_snapshot`：6,616 条已归一化缓存观察，映射到 Amazon、Walmart、eBay 三个平台回退分区，用于检索、排序、评测和跨平台比较；
+2. `public_demo_catalog_snapshot`：1,000 条多来源公开测试、模拟商城和开放价格数据，用于补充综合品类和验证数据采集链路；
 
-Amazon、Shopee、AliExpress、eBay 仍作为合成数据中的平台分区存在，但不代表已接入这些平台的实时官方商品。
+离线快照统一映射到 Amazon、Walmart、eBay 三个平台离线分区。它们是历史或公开来源缓存观察，不代表实时官方商品、库存或结算价格。
 
 ## 2. Provider 架构
 
@@ -18,7 +18,7 @@ CatalogSearchRequest
     ↓
 Catalog Router
     ├── public_demo → public_demo_catalog_snapshot
-    └── 离线平台分区 → synthetic_hybrid
+    └── 三平台离线分区 → offline_snapshot
     ↓
 统一 Candidate
     ↓
@@ -38,7 +38,7 @@ app/catalog/
 ## 3. 合成数据
 
 ```env
-SHOPPILOT_DATASET_DIR=./data/merged_catalog
+SHOPPILOT_DATASET_DIR=./data/offline_catalog
 SHOPPILOT_DATASET_SCHEMA_VERSION=2
 ```
 
@@ -46,15 +46,15 @@ SHOPPILOT_DATASET_SCHEMA_VERSION=2
 
 - BM25、BGE、Faiss、RRF 和 LTR 离线评测；
 - 预算、材质等硬约束过滤；
-- 四个平台分区的离线跨平台比较；
+- Amazon/Walmart/eBay 三平台分区的离线跨平台比较；
 - Agent、Checkpoint、记忆、可靠性和前端演示；
 - 可复现自动化测试。
 
 必须标注：
 
 ```text
-data_origin=synthetic
-verification_status=synthetic
+data_origin=offline_snapshot
+verification_status=cached
 ```
 
 ## 4. 公开测试商品目录
@@ -169,11 +169,12 @@ Open Prices 数据属于开放的历史价格观察，不能据此声称商品�
 
 推荐表述：
 
-> 我为商品数据设计了统一 Catalog Provider 层。项目默认使用 1,200 条可复现的离线合成商品，用 Amazon、Shopee、AliExpress、eBay 四个大电商平台风格分区来做检索评测和面试演示；另有 1,000 条可选的模拟电商目录用于补充综合品类。构建器会做统一 Schema、去重、分类映射、来源与数据边界标注以及品类占比控制，再进入检索、比价和 Agent 编排流程。
+> 我为商品数据设计了统一 Catalog Provider 层。项目默认使用 6,616 条离线缓存观察，并映射到 Amazon、Walmart、eBay 三个平台离线分区。构建器会做统一 Schema、去重、分类映射和数据边界标注，再进入检索、比价和 Agent 编排流程。
 
 不要表述为：
 
-- 已接入 eBay、Rakuten、Amazon 等实时官方商品；
+- 离线快照等于当前官方库存或实时价格；
+- 已接入所有平台的实时官方商品；
 - 能获取真实库存、成交量或最终结算价；
 - 公开测试目录中的商品都可以实际购买；
 - Open Prices 历史观察等于当前零售价；

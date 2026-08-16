@@ -135,9 +135,9 @@ async def test_summary_appends_validated_category_evidence(
 
     result = await shopping_summary(picker, plan, insight)
 
-    assert "### 品类依据（合成知识库）" in result.final_text
+    assert "### 品类依据（项目知识库）" in result.final_text
     assert "[K0030]" in result.final_text
-    assert "不代表真实平台市场" in result.final_text
+    assert "不代表实时平台市场" in result.final_text
 
 
 @pytest.mark.asyncio

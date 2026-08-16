@@ -49,7 +49,7 @@ LangChain create_agent（LangGraph runtime + checkpointer）
 - 统一工具执行 Harness：错误分类、瞬时故障重试、分级超时、熔断半开恢复、checkpoint/in-flight 幂等复用。
 - Cache Breakpoint 上下文治理：稳定摘要 epoch、最近工具轮保留、工具结果结构化压缩和缓存 token 指标。
 - 版本化结构化长期记忆：偏好/排除项/历史、来源会话、置信度、冲突覆盖、相关性召回和旧 JSON 自动迁移。
-- Schema v2 合成商品数据集直读：六品类、四平台、1,200 条商品，`Candidate.model_validate_json()` 无运行时映射。
+- Schema v2 三平台离线回退快照直读：6,616 条已归一化缓存观察，统一进入 Amazon、Walmart、eBay 三个平台分区，`Candidate.model_validate_json()` 无运行时映射。
 - 咖啡杯、旅行收纳、双肩包、键盘、耳机和保温杯均具备跨平台同款组、Query、行为与品类知识。
 - Hybrid Retrieval v2：中文 BM25、BGE 中文语义 Embedding、Faiss HNSW、dev-only RRF 调参、预算/材质硬过滤和 Top-N 重排。
 - Pairwise Learning-to-Rank：使用 train/dev Query 与行为先验训练 19 维线性 reranker，模型产物校验 provider/model，不兼容时自动降级规则重排。
@@ -121,15 +121,19 @@ JUDGE_TIMEOUT_SEC=75
 主商品数据集（面试演示默认使用）：
 
 ```env
-SHOPPILOT_DATASET_DIR=./data/merged_catalog
+SHOPPILOT_DATASET_DIR=./data/offline_catalog
 SHOPPILOT_DATASET_SCHEMA_VERSION=2
 ```
 
-正式运行直接读取项目内合并数据集的 `products.jsonl`。当前默认数据包含 2,200 条商品，已统一映射为 Amazon、Shopee、AliExpress、eBay 四个“模拟大电商平台风格”的离线商品分区，不代表已接入对应平台的实时官方商品。当前可用数据源设计见 [`docs/REAL_CATALOG_PROVIDER_PLAN.md`](docs/REAL_CATALOG_PROVIDER_PLAN.md)。可直接在项目根目录验证数据集：
+正式运行直接读取项目内 `data/offline_catalog/products.jsonl`。当前快照包含 6,616 条缓存观察，统一映射到 Amazon、Walmart、eBay 三个在线平台对应的离线回退分区。离线结果不代表当前库存、官方实时价格或可结算商品。当前可用数据源设计见 [`docs/REAL_CATALOG_PROVIDER_PLAN.md`](docs/REAL_CATALOG_PROVIDER_PLAN.md)。可直接在项目根目录验证数据集：
 
 ```powershell
 .venv312\Scripts\python.exe -c "from app.recall.catalog import load_catalog; print(len(load_catalog()))"
 ```
+
+离线快照中的历史 Amazon、Walmart、eBay 及其他开放市场来源已统一映射到三个平台的离线分区；结果会标记为缓存快照，不代表实时库存、官方 API 或结算价格。
+
+用户行为模拟：项目使用外部 SIGIR 电商搜索挑战数据的有界样本生成 `queries.jsonl`、`interactions.jsonl` 和 `users.jsonl`，当前快照包含 3,533 条查询、85,692 条行为事件和 15,425 个匿名会话用户。由于 SIGIR 的查询和 SKU 是向量/哈希，转换器通过确定性哈希映射到当前商品 `same_group_id`，并将事件标记为 `sigir_simulation`、平台标记为 `public_demo`；这些数据只用于离线 LTR 和检索评测，不代表 Amazon、Walmart 或 eBay 的真实用户行为。原始数据使用限制和转换命令见 [`scripts/import_sigir_behavior.py`](scripts/import_sigir_behavior.py) 及 [`data/offline_catalog/sigir_behavior_summary.json`](data/offline_catalog/sigir_behavior_summary.json)。
 
 可选模拟电商目录（无需账号或 API Key，补充综合品类）：
 
@@ -152,7 +156,7 @@ SHOPPILOT_PUBLIC_DEMO_DATA_FILE=./data/public_demo/products.jsonl
 .venv312\Scripts\python.exe scripts/scrape_public_demo.py --limit 25
 ```
 
-面试演示建议优先使用四个模拟大平台，例如：`在 amazon、shopee、aliexpress、ebay 分别搜索预算 300 元以内的咖啡杯。` 如需补充综合品类，可使用 `public_demo` 模拟电商目录，详细说明见 [`docs/PUBLIC_DEMO_SCRAPER.md`](docs/PUBLIC_DEMO_SCRAPER.md)。
+面试演示可直接使用三个平台，例如：`在 amazon、walmart、ebay 分别搜索预算 300 元以内的咖啡杯。` 结果来自本地离线快照，不代表实时库存或官方结算价格；如需补充综合品类，可使用 `public_demo` 模拟电商目录，详细说明见 [`docs/PUBLIC_DEMO_SCRAPER.md`](docs/PUBLIC_DEMO_SCRAPER.md)。
 
 Hybrid Retrieval 配置：
 
@@ -191,7 +195,7 @@ SHOPPILOT_KNOWLEDGE_SYNTHESIS_MAX_CLAIMS=6
 SHOPPILOT_KNOWLEDGE_SYNTHESIS_MIN_TOKEN_OVERLAP=0.05
 ```
 
-正式配置使用 `BAAI/bge-small-zh-v1.5` 的 512 维语义向量；测试仍可切换 `hashing` 作为无模型依赖回退。商品按平台和品类建立独立 Faiss HNSW 分区。Embedding 缓存按实际向量文本内容 + provider/model 生成稳定指纹，不再因为 `products.jsonl` 的 mtime 或复制路径变化而无效；BGE 优先从本地 Hugging Face snapshot 加载，只有本地不存在时才访问 Hub。进程首次使用时会在主 Agent 300 秒执行预算开始前预热检索器，并通过 single-flight 锁保证并发四平台 fork 只初始化一份模型/索引。`auto` reranker 只有在包内模型与当前 provider/model 完全匹配时才启用 LTR，否则退回规则重排；未知品类不会回退到整个平台商品。
+正式配置使用 `BAAI/bge-small-zh-v1.5` 的 512 维语义向量；测试仍可切换 `hashing` 作为无模型依赖回退。商品按平台和品类建立独立 Faiss HNSW 分区。Embedding 缓存按实际向量文本内容 + provider/model 生成稳定指纹，不再因为 `products.jsonl` 的 mtime 或复制路径变化而无效；BGE 优先从本地 Hugging Face snapshot 加载，只有本地不存在时才访问 Hub。进程首次使用时会在主 Agent 300 秒执行预算开始前预热检索器，并通过 single-flight 锁保证并发多平台 fork 只初始化一份模型/索引。`auto` reranker 只有在包内模型与当前 provider/model 完全匹配时才启用 LTR，否则退回规则重排；未知品类不会回退到整个平台商品。
 
 本地 checkpoint：
 
@@ -448,4 +452,4 @@ app/tools/
 
 ## 尚未接入的生产组件
 
-当前长期记忆后端仍是本地原子 JSON 文件，生产多实例可继续替换为 PostgreSQL/向量 Store。商品数据与 30 篇品类知识均为可复现合成数据，平台字段仅模拟 Amazon、Shopee、AliExpress、eBay 等大电商平台风格，不是真实平台商品或专家语料；当前 LTR 是可解释的线性 pairwise 模型，不是大规模 CrossEncoder。CategoryInsight 已完成真实模型 grounded synthesis 和引用校验，但评测集规模仍小；后续重点是扩充人工知识与对抗评测集、三塔个性化召回、Cross-Encoder 对照，以及真实平台 API、实时汇率与 HS Code 税则服务。
+当前长期记忆后端仍是本地原子 JSON 文件，生产多实例可继续替换为 PostgreSQL/向量 Store。默认商品数据是多来源历史离线快照，平台字段用于来源分区，不代表当前官方库存或实时结算价；30 篇品类知识仍是可复现测试语料。当前 LTR 是可解释的线性 pairwise 模型，不是大规模 CrossEncoder。CategoryInsight 已完成真实模型 grounded synthesis 和引用校验，但评测集规模仍小；后续重点是扩充人工知识与对抗评测集、三塔个性化召回、Cross-Encoder 对照，以及实时汇率与 HS Code 税则服务。
