@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -45,6 +46,14 @@ logger = logging.getLogger(__name__)
 active_tasks: dict[str, asyncio.Task[None]] = {}
 results: dict[str, AgentResult] = {}
 _cleanup_task: asyncio.Task[None] | None = None
+
+
+def _cors_origins() -> list[str]:
+    configured = os.getenv(
+        "SHOPPILOT_CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173",
+    )
+    return [origin.strip() for origin in configured.split(",") if origin.strip()]
 
 
 async def _run_checkpoint_cleanup() -> dict:
@@ -109,7 +118,7 @@ app = FastAPI(
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

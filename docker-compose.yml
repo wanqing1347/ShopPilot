@@ -1,0 +1,45 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      SHOPPILOT_DATASET_DIR: /app/data/offline_catalog
+      SHOPPILOT_RETRIEVAL_INDEX_DIR: /var/lib/shoppilot/retrieval
+      SHOPPILOT_OUTPUT_DIR: /var/lib/shoppilot/output
+      SHOPPILOT_UPLOAD_DIR: /var/lib/shoppilot/uploaded
+      SHOPPILOT_MEMORY_FILE: /var/lib/shoppilot/preferences.json
+      SHOPPILOT_CHECKPOINT_DB: /var/lib/shoppilot/checkpoints.sqlite3
+    expose:
+      - "8000"
+    volumes:
+      - shoppilot-data:/var/lib/shoppilot
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+    restart: unless-stopped
+
+volumes:
+  shoppilot-data:
